@@ -217,28 +217,21 @@ func (t *Transformer) SlackConvertUserMentions(users []SlackUser, posts map[stri
 	
 	t.Logger.Infof("Starting user mention conversion: %d users, %d channels, %d total posts", len(users), len(posts), totalPosts)
 	
-	// Compile all regexes once at the start
-	regexStart := time.Now()
-	var regexes = make(map[string]*regexp.Regexp, len(users)+3)
-	compiledRegexes := 0
+	// Build lookup maps once (O(users) instead of O(users×posts))
+	mapStart := time.Now()
+	userIdToUsername := make(map[string]string, len(users))
 	for _, user := range users {
-		r, err := regexp.Compile("<@" + user.Id + `(\|` + user.Username + ")?>")
-		if err != nil {
-			t.Logger.Infof("Slack Import: Unable to compile the @mention, matching regular expression for the Slack user. username=%s user_id=%s", user.Username, user.Id)
-			continue
-		}
-		regexes["@"+user.Username] = r
-		compiledRegexes++
+		userIdToUsername[user.Id] = "@" + user.Username
 	}
-
-	// Special cases.
-	regexes["@here"], _ = regexp.Compile("<(!|@)here>")
-	regexes["@channel"], _ = regexp.Compile("<!channel>")
-	regexes["@all"], _ = regexp.Compile("<!everyone>")
-	compiledRegexes += 3
 	
-	regexDuration := time.Since(regexStart)
-	t.Logger.Debugf("Compiled %d user mention regexes in %v", compiledRegexes, regexDuration)
+	// Pre-compile the generic regexes once
+	userMentionRegex := regexp.MustCompile(`<@([A-Z0-9]{8,})(?:\|[^>]+)?>`)
+	hereRegex := regexp.MustCompile(`<(!|@)here(?:\|@?here)?>`)
+	channelRegex := regexp.MustCompile(`<!channel(?:\|@?channel)?>`)
+	everyoneRegex := regexp.MustCompile(`<!everyone(?:\|@?everyone)?>`)
+	
+	mapDuration := time.Since(mapStart)
+	t.Logger.Debugf("Built user lookup map (%d users) and compiled generic regexes in %v", len(users), mapDuration)
 
 	convertCount := 0
 	processedPosts := 0
@@ -247,16 +240,17 @@ func (t *Transformer) SlackConvertUserMentions(users []SlackUser, posts map[stri
 		t.Logger.Debugf("Slack Import: converting user mentions for channel %s. %v of %v channels (%d posts)", channelName, convertCount, len(posts), len(channelPosts))
 		
 		for postIdx, post := range channelPosts {
-			for mention, r := range regexes {
-				post.Text = r.ReplaceAllString(post.Text, mention)
-				posts[channelName][postIdx] = post
-
-				if post.Attachments != nil {
-					for _, attachment := range post.Attachments {
-						attachment.Fallback = r.ReplaceAllString(attachment.Fallback, mention)
-					}
+			// Process post text with single pass
+			post.Text = t.convertUserMentionsInText(post.Text, userIdToUsername, userMentionRegex, hereRegex, channelRegex, everyoneRegex)
+			
+			// Process attachment fallbacks
+			if post.Attachments != nil {
+				for _, attachment := range post.Attachments {
+					attachment.Fallback = t.convertUserMentionsInText(attachment.Fallback, userIdToUsername, userMentionRegex, hereRegex, channelRegex, everyoneRegex)
 				}
 			}
+			
+			posts[channelName][postIdx] = post
 			processedPosts++
 		}
 		
@@ -272,6 +266,34 @@ func (t *Transformer) SlackConvertUserMentions(users []SlackUser, posts map[stri
 	finalRate := float64(processedPosts) / totalDuration.Seconds()
 	t.Logger.Infof("Slack Import: Converted user mentions in %v - %d posts at %.1f posts/sec", totalDuration, processedPosts, finalRate)
 	return posts
+}
+
+// Helper function to convert user mentions in a single text string
+func (t *Transformer) convertUserMentionsInText(text string, userIdToUsername map[string]string, userMentionRegex, hereRegex, channelRegex, everyoneRegex *regexp.Regexp) string {
+	// Handle special mentions first (to avoid conflicts)
+	text = hereRegex.ReplaceAllString(text, "@here")
+	text = channelRegex.ReplaceAllString(text, "@channel")
+	text = everyoneRegex.ReplaceAllString(text, "@all")
+	
+	// Handle user mentions with single regex + map lookup  
+	text = userMentionRegex.ReplaceAllStringFunc(text, func(match string) string {
+		// Extract user ID efficiently without second regex call
+		// Format: <@U123ABC456> or <@U123ABC456|username>
+		start := 2 // Skip "<@"
+		end := len(match) - 1 // Skip ">"
+		if pipeIdx := strings.IndexByte(match, '|'); pipeIdx > start {
+			end = pipeIdx // Use everything before the "|"
+		}
+		userId := match[start:end]
+		
+		// Look up username, return original if not found (preserves current behavior)
+		if username, found := userIdToUsername[userId]; found {
+			return username
+		}
+		return match // Keep original text if user not found
+	})
+	
+	return text
 }
 
 func (t *Transformer) SlackConvertChannelMentions(channels []SlackChannel, posts map[string][]SlackPost) map[string][]SlackPost {
