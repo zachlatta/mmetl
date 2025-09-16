@@ -40,33 +40,40 @@ package: check-style
 
 	rm mmetl mmetl.exe
 
+# run all Go tests
+test:
+	go test ./...
+
+# run linter (requires golangci-lint)
+lint:
+	golangci-lint run
+
+# Format all Go files
+fmt:
+	go fmt ./...
+
+# remove build artifacts
+clean:
+	rm -rf build mmetl mmetl.exe *.md5.txt
+
+# generate coverage report
+coverage:
+	go test -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out
+
 golangci-lint:
 # https://stackoverflow.com/a/677212/1027058 (check if a command exists or not)
 	@if ! [ -x "$$(command -v golangci-lint)" ]; then \
 		echo "golangci-lint is not installed. Please see https://github.com/golangci/golangci-lint#install for installation instructions."; \
-		exit 1; \
-	fi; \
-
-	@echo Running golangci-lint
-	golangci-lint run --skip-dirs-use-default --timeout 5m -E gofmt ./...
-
-
-gofmt:
-	@echo Running gofmt
-	@for package in $(GO_PACKAGES); do \
-		echo "Checking "$$package; \
-		files=$$(go list -f '{{range .GoFiles}}{{$$.Dir}}/{{.}} {{end}}' $$package); \
-		if [ "$$files" ]; then \
-			gofmt_output=$$(gofmt -d -s $$files 2>&1); \
-			if [ "$$gofmt_output" ]; then \
-				echo "$$gofmt_output"; \
-				echo "Gofmt failure"; \
-				exit 1; \
-			fi; \
+		test:
 		fi; \
+		lint:
 	done
+		fmt:
 	@echo Gofmt success
+		clean:
 
+		coverage:
 
 test:
 	@echo Running tests
