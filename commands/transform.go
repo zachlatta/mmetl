@@ -3,6 +3,7 @@ package commands
 import (
 	"archive/zip"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"runtime"
@@ -116,7 +117,10 @@ func transformSlackCmdF(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer logFile.Close()
-	logger.SetOutput(logFile)
+	
+	// Log to both file and stdout for better visibility
+	multiWriter := io.MultiWriter(os.Stdout, logFile)
+	logger.SetOutput(multiWriter)
 	logger.SetFormatter(customLogFormatter)
 	logger.SetReportCaller(true)
 
