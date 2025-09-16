@@ -207,7 +207,20 @@ func (t *Transformer) SlackParsePosts(data io.Reader) ([]SlackPost, error) {
 }
 
 func (t *Transformer) SlackConvertUserMentions(users []SlackUser, posts map[string][]SlackPost) map[string][]SlackPost {
-	var regexes = make(map[string]*regexp.Regexp, len(users))
+	start := time.Now()
+	
+	// Count total posts for progress tracking
+	totalPosts := 0
+	for _, channelPosts := range posts {
+		totalPosts += len(channelPosts)
+	}
+	
+	t.Logger.Infof("Starting user mention conversion: %d users, %d channels, %d total posts", len(users), len(posts), totalPosts)
+	
+	// Compile all regexes once at the start
+	regexStart := time.Now()
+	var regexes = make(map[string]*regexp.Regexp, len(users)+3)
+	compiledRegexes := 0
 	for _, user := range users {
 		r, err := regexp.Compile("<@" + user.Id + `(\|` + user.Username + ")?>")
 		if err != nil {
@@ -215,17 +228,24 @@ func (t *Transformer) SlackConvertUserMentions(users []SlackUser, posts map[stri
 			continue
 		}
 		regexes["@"+user.Username] = r
+		compiledRegexes++
 	}
 
 	// Special cases.
 	regexes["@here"], _ = regexp.Compile("<(!|@)here>")
 	regexes["@channel"], _ = regexp.Compile("<!channel>")
 	regexes["@all"], _ = regexp.Compile("<!everyone>")
+	compiledRegexes += 3
+	
+	regexDuration := time.Since(regexStart)
+	t.Logger.Debugf("Compiled %d user mention regexes in %v", compiledRegexes, regexDuration)
 
 	convertCount := 0
+	processedPosts := 0
 	for channelName, channelPosts := range posts {
 		convertCount++
-		t.Logger.Debugf("Slack Import: converting user mentions for channel %s. %v of %v", channelName, convertCount, len(posts))
+		t.Logger.Debugf("Slack Import: converting user mentions for channel %s. %v of %v channels (%d posts)", channelName, convertCount, len(posts), len(channelPosts))
+		
 		for postIdx, post := range channelPosts {
 			for mention, r := range regexes {
 				post.Text = r.ReplaceAllString(post.Text, mention)
@@ -237,15 +257,38 @@ func (t *Transformer) SlackConvertUserMentions(users []SlackUser, posts map[stri
 					}
 				}
 			}
+			processedPosts++
+		}
+		
+		// Progress logging every 10 channels or every 1000 posts
+		if convertCount%10 == 0 || processedPosts >= 1000 {
+			elapsed := time.Since(start)
+			rate := float64(processedPosts) / elapsed.Seconds()
+			t.Logger.Infof("User mentions progress: %d/%d posts processed (%.1f posts/sec)", processedPosts, totalPosts, rate)
 		}
 	}
 
-	t.Logger.Infof("Slack Import: Converted user mentions")
+	totalDuration := time.Since(start)
+	finalRate := float64(processedPosts) / totalDuration.Seconds()
+	t.Logger.Infof("Slack Import: Converted user mentions in %v - %d posts at %.1f posts/sec", totalDuration, processedPosts, finalRate)
 	return posts
 }
 
 func (t *Transformer) SlackConvertChannelMentions(channels []SlackChannel, posts map[string][]SlackPost) map[string][]SlackPost {
+	start := time.Now()
+	
+	// Count total posts for progress tracking
+	totalPosts := 0
+	for _, channelPosts := range posts {
+		totalPosts += len(channelPosts)
+	}
+	
+	t.Logger.Infof("Starting channel mention conversion: %d channels, %d post channels, %d total posts", len(channels), len(posts), totalPosts)
+	
+	// Compile all regexes once at the start
+	regexStart := time.Now()
 	var regexes = make(map[string]*regexp.Regexp, len(channels))
+	compiledRegexes := 0
 	for _, channel := range channels {
 		r, err := regexp.Compile("<#" + channel.Id + `(\|` + channel.Name + ")?>")
 		if err != nil {
@@ -253,12 +296,17 @@ func (t *Transformer) SlackConvertChannelMentions(channels []SlackChannel, posts
 			continue
 		}
 		regexes["~"+channel.Name] = r
+		compiledRegexes++
 	}
+	
+	regexDuration := time.Since(regexStart)
+	t.Logger.Debugf("Compiled %d channel mention regexes in %v", compiledRegexes, regexDuration)
 
 	convertCount := 0
+	processedPosts := 0
 	for channelName, channelPosts := range posts {
 		convertCount++
-		t.Logger.Debugf("Slack Import: converting channel mentions for channel %s. %v of %v", channelName, convertCount, len(posts))
+		t.Logger.Debugf("Slack Import: converting channel mentions for channel %s. %v of %v channels (%d posts)", channelName, convertCount, len(posts), len(channelPosts))
 		for postIdx, post := range channelPosts {
 			for channelReplace, r := range regexes {
 				post.Text = r.ReplaceAllString(post.Text, channelReplace)
@@ -270,15 +318,35 @@ func (t *Transformer) SlackConvertChannelMentions(channels []SlackChannel, posts
 					}
 				}
 			}
+			processedPosts++
+		}
+		
+		// Progress logging every 10 channels or every 1000 posts
+		if convertCount%10 == 0 || processedPosts >= 1000 {
+			elapsed := time.Since(start)
+			rate := float64(processedPosts) / elapsed.Seconds()
+			t.Logger.Infof("Channel mentions progress: %d/%d posts processed (%.1f posts/sec)", processedPosts, totalPosts, rate)
 		}
 	}
 
-	t.Logger.Infof("Slack Import: Converted channel mentions")
+	totalDuration := time.Since(start)
+	finalRate := float64(processedPosts) / totalDuration.Seconds()
+	t.Logger.Infof("Slack Import: Converted channel mentions in %v - %d posts at %.1f posts/sec", totalDuration, processedPosts, finalRate)
 
 	return posts
 }
 
 func (t *Transformer) SlackConvertPostsMarkup(posts map[string][]SlackPost) map[string][]SlackPost {
+	start := time.Now()
+	
+	// Count total posts for progress tracking
+	totalPosts := 0
+	for _, channelPosts := range posts {
+		totalPosts += len(channelPosts)
+	}
+	
+	t.Logger.Infof("Starting markup conversion: %d channels, %d total posts", len(posts), totalPosts)
+	
 	regexReplaceAllString := []struct {
 		regex *regexp.Regexp
 		rpl   string
@@ -325,9 +393,10 @@ func (t *Transformer) SlackConvertPostsMarkup(posts map[string][]SlackPost) map[
 	}
 
 	convertCount := 0
+	processedPosts := 0
 	for channelName, channelPosts := range posts {
 		convertCount++
-		t.Logger.Debugf("Slack Import: converting markdown for channel %s. %v of %v", channelName, convertCount, len(posts))
+		t.Logger.Debugf("Slack Import: converting markdown for channel %s. %v of %v channels (%d posts)", channelName, convertCount, len(posts), len(channelPosts))
 
 		for postIdx, post := range channelPosts {
 			result := post.Text
@@ -340,10 +409,20 @@ func (t *Transformer) SlackConvertPostsMarkup(posts map[string][]SlackPost) map[
 				result = rule.regex.ReplaceAllStringFunc(result, rule.fn)
 			}
 			posts[channelName][postIdx].Text = result
+			processedPosts++
+		}
+		
+		// Progress logging every 10 channels or every 1000 posts
+		if convertCount%10 == 0 || processedPosts >= 1000 {
+			elapsed := time.Since(start)
+			rate := float64(processedPosts) / elapsed.Seconds()
+			t.Logger.Infof("Markup progress: %d/%d posts processed (%.1f posts/sec)", processedPosts, totalPosts, rate)
 		}
 	}
 
-	t.Logger.Infof("Slack Import: Converted markdown")
+	totalDuration := time.Since(start)
+	finalRate := float64(processedPosts) / totalDuration.Seconds()
+	t.Logger.Infof("Slack Import: Converted markdown in %v - %d posts at %.1f posts/sec", totalDuration, processedPosts, finalRate)
 
 	return posts
 }
